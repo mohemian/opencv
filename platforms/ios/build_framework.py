@@ -50,10 +50,29 @@ def build_opencv(srcroot, buildroot, target, arch):
     os.chdir(builddir)
     # for some reason, if you do not specify CMAKE_BUILD_TYPE, it puts libs to "RELEASE" rather than "Release"
     cmakeargs = ("-GXcode " +
-                "-DCMAKE_BUILD_TYPE=Release " +
-                "-DCMAKE_TOOLCHAIN_FILE=%s/platforms/ios/cmake/Toolchains/Toolchain-%s_Xcode.cmake " +
-                "-DCMAKE_C_FLAGS=\"-Wno-implicit-function-declaration\" " +
-                "-DCMAKE_INSTALL_PREFIX=install") % (srcroot, target)
+                 "-DCMAKE_BUILD_TYPE=Release " +
+                 "-DBUILD_opencv_core=ON " +
+                 "-DBUILD_opencv_imgcodecs=ON " +
+                 "-DBUILD_opencv_imgproc=ON " +
+                 "-DBUILD_opencv_world=ON " +
+                 "-DBUILD_opencv_gpu=OFF " +
+                 "-DBUILD_opencv_calib3d=OFF " +
+                 "-DBUILD_opencv_contrib=OFF " +
+                 "-DBUILD_opencv_features2D=OFF " +
+                 "-DBUILD_opencv_flann=OFF " +
+                 "-DBUILD_opencv_highgui=OFF " +
+                 "-DBUILD_opencv_legacy=OFF " +
+                 "-DBUILD_opencv_ml=OFF " +
+                 "-DBUILD_opencv_nonfree=OFF " +
+                 "-DBUILD_opencv_objdetect=OFF " +
+                 "-DBUILD_opencv_photo=OFF " +
+                 "-DBUILD_opencv_stitching=OFF " +
+                 "-DBUILD_opencv_video=OFF " +
+                 "-DBUILD_opencv_videoio=ON " +
+                 "-DBUILD_opencv_videostab=OFF " +
+                 "-DCMAKE_TOOLCHAIN_FILE=%s/platforms/ios/cmake/Toolchains/Toolchain-%s_Xcode.cmake " +
+                 "-DCMAKE_C_FLAGS=\"-Wno-implicit-function-declaration -fembed-bitcode\" " +
+                 "-DCMAKE_INSTALL_PREFIX=install") % (srcroot, target)
 
     if arch.startswith("armv"):
         cmakeargs += " -DENABLE_NEON=ON"
