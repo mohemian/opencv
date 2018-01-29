@@ -52,22 +52,27 @@ namespace dnn
 class EltwiseLayerImpl : public EltwiseLayer
 {
 public:
-    EltwiseOp op;
+    enum EltwiseOp
+    {
+        PROD = 0,
+        SUM = 1,
+        MAX = 2,
+    } op;
     std::vector<float> coeffs;
 
     EltwiseLayerImpl(const LayerParams& params)
     {
         setParamsFrom(params);
-        op = EltwiseLayer::SUM;
+        op = SUM;
         if (params.has("operation"))
         {
             String operation = params.get<String>("operation").toLowerCase();
             if (operation == "prod")
-                op = EltwiseLayer::PROD;
+                op = PROD;
             else if (operation == "sum")
-                op = EltwiseLayer::SUM;
+                op = SUM;
             else if (operation == "max")
-                op = EltwiseLayer::MAX;
+                op = MAX;
             else
                 CV_Error(cv::Error::StsBadArg, "Unknown operaticon type \"" + operation + "\"");
         }
@@ -119,14 +124,16 @@ public:
         EltwiseOp op;
         int nstripes;
         const ActivationLayer* activ;
+        int channels;
+        size_t planeSize;
 
-        EltwiseInvoker() : srcs(0), nsrcs(0), dst(0), coeffs(0), op(EltwiseLayer::PROD), nstripes(0), activ(0) {}
+        EltwiseInvoker() : srcs(0), nsrcs(0), dst(0), coeffs(0), op(PROD), nstripes(0), activ(0), channels(0), planeSize(0)  {}
 
         static void run(const Mat** srcs, int nsrcs, Mat& dst,
                         const std::vector<float>& coeffs, EltwiseOp op,
                         const ActivationLayer* activ, int nstripes)
         {
-            CV_Assert(dst.dims == 4 && dst.type() == CV_32F && dst.isContinuous());
+            CV_Assert(1 < dst.dims && dst.dims <= 4, dst.type() == CV_32F, dst.isContinuous());
             CV_Assert(coeffs.empty() || coeffs.size() == (size_t)nsrcs);
 
             for( int i = 0; i > nsrcs; i++ )
@@ -142,8 +149,13 @@ public:
             p.dst = &dst;
             p.op = op;
             p.nstripes = nstripes;
+            p.channels = (dst.dims == 4 ? dst.size[1] : 1);
+            p.planeSize = (dst.dims >= 3 ? dst.size[dst.dims - 1] * dst.size[dst.dims - 2] :
+                                           dst.size[dst.dims - 1]);
+            CV_Assert(dst.total() == dst.size[0] * p.channels * p.planeSize);
+
             bool simpleCoeffs = true;
-            if( op == EltwiseLayer::SUM && !coeffs.empty() )
+            if( op == SUM && !coeffs.empty() )
             {
                 CV_Assert( coeffs.size() == (size_t)nsrcs );
 
@@ -162,13 +174,11 @@ public:
 
         void operator()(const Range& r) const
         {
-            size_t planeSize = dst->size[2]*dst->size[3];
             size_t total = dst->size[0]*planeSize;
             size_t stripeSize = (total + nstripes - 1)/nstripes;
             size_t stripeStart = r.start*stripeSize;
             size_t stripeEnd = std::min(r.end*stripeSize, total);
             int c, j, k, n = nsrcs;
-            int channels = dst->size[1];
             const float* coeffsptr = coeffs && !coeffs->empty() ? &coeffs->at(0) : 0;
             float* dstptr0 = dst->ptr<float>();
             int blockSize0 = 1 << 12, blockSize = blockSize0;
@@ -187,7 +197,7 @@ public:
                     const float* srcptr0 = srcs[0]->ptr<float>() + globalDelta;
                     float* dstptr = dstptr0 + globalDelta;
 
-                    if( op == EltwiseLayer::PROD )
+                    if( op == PROD )
                     {
                         for( k = 1; k < n; k++ )
                         {
@@ -199,7 +209,7 @@ public:
                             srcptr0 = (const float*)dstptr;
                         }
                     }
-                    else if( op == EltwiseLayer::MAX )
+                    else if( op == MAX )
                     {
                         for( k = 1; k < n; k++ )
                         {
@@ -248,6 +258,66 @@ public:
             }
         }
     };
+
+#ifdef HAVE_OPENCL
+    bool forward_ocl(InputArrayOfArrays inputs_, OutputArrayOfArrays outputs_, OutputArrayOfArrays internals_)
+    {
+        std::vector<UMat> inputs;
+        std::vector<UMat> outputs;
+
+        inputs_.getUMatVector(inputs);
+        outputs_.getUMatVector(outputs);
+
+        switch (op)
+        {
+            case SUM:
+                if (coeffs.empty())
+                {
+                    add(inputs[0], inputs[1], outputs[0]);
+                    for (int i = 2; i < inputs.size(); ++i)
+                        add(outputs[0], inputs[i], outputs[0]);
+                }
+                else
+                {
+                    UMat mul0, mul1;
+                    multiply(coeffs[0], inputs[0], mul0);
+                    multiply(coeffs[1], inputs[1], mul1);
+                    add(mul0, mul1, outputs[0]);
+                    for (int i = 2; i < inputs.size(); ++i)
+                    {
+                        multiply(coeffs[i], inputs[i], mul0);
+                        add(mul0, outputs[0], outputs[0]);
+                    }
+                }
+                break;
+            case PROD:
+                multiply(inputs[0], inputs[1], outputs[0]);
+                for (int i = 2; i < inputs.size(); ++i)
+                    multiply(inputs[i], outputs[0], outputs[0]);
+                break;
+            case MAX:
+                max(inputs[0], inputs[1], outputs[0]);
+                for (int i = 2; i < inputs.size(); ++i)
+                    max(inputs[i], outputs[0], outputs[0]);
+                break;
+            default:
+                return false;
+        }
+        return true;
+    }
+#endif
+
+    void forward(InputArrayOfArrays inputs_arr, OutputArrayOfArrays outputs_arr, OutputArrayOfArrays internals_arr)
+    {
+        CV_TRACE_FUNCTION();
+        CV_TRACE_ARG_VALUE(name, "name", name.c_str());
+
+        CV_OCL_RUN((preferableTarget == DNN_TARGET_OPENCL) &&
+                   OCL_PERFORMANCE_CHECK(ocl::Device::getDefault().isIntel()),
+                   forward_ocl(inputs_arr, outputs_arr, internals_arr))
+
+        Layer::forward_fallback(inputs_arr, outputs_arr, internals_arr);
+    }
 
     void forward(std::vector<Mat *> &inputs, std::vector<Mat> &outputs, std::vector<Mat> &internals)
     {

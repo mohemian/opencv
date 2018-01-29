@@ -53,6 +53,10 @@
 
 #include "opencv2/core/bufferpool.hpp"
 
+#ifdef CV_CXX11
+#include <type_traits>
+#endif
+
 namespace cv
 {
 
@@ -61,6 +65,8 @@ namespace cv
 
 enum { ACCESS_READ=1<<24, ACCESS_WRITE=1<<25,
     ACCESS_RW=3<<24, ACCESS_MASK=ACCESS_RW, ACCESS_FAST=1<<26 };
+
+CV__DEBUG_NS_BEGIN
 
 class CV_EXPORTS _OutputArray;
 
@@ -351,6 +357,9 @@ public:
 
     void assign(const UMat& u) const;
     void assign(const Mat& m) const;
+
+    void assign(const std::vector<UMat>& v) const;
+    void assign(const std::vector<Mat>& v) const;
 };
 
 
@@ -399,6 +408,8 @@ public:
 #endif
 
 };
+
+CV__DEBUG_NS_END
 
 typedef const _InputArray& InputArray;
 typedef InputArray InputArrayOfArrays;
@@ -534,14 +545,6 @@ struct CV_EXPORTS UMatData
 };
 
 
-struct CV_EXPORTS UMatDataAutoLock
-{
-    explicit UMatDataAutoLock(UMatData* u);
-    ~UMatDataAutoLock();
-    UMatData* u;
-};
-
-
 struct CV_EXPORTS MatSize
 {
     explicit MatSize(int* _p);
@@ -574,7 +577,7 @@ protected:
 An example demonstrating the serial out capabilities of cv::Mat
 */
 
- /** @brief n-dimensional dense array class
+ /** @brief n-dimensional dense array class \anchor CVMat_Details
 
 The class Mat represents an n-dimensional dense numerical single-channel or multi-channel array. It
 can be used to store real or complex-valued vectors and matrices, grayscale or color images, voxel
@@ -984,7 +987,8 @@ public:
 #ifdef CV_CXX11
     /** @overload
     */
-    template<typename _Tp> explicit Mat(const std::initializer_list<_Tp> list);
+    template<typename _Tp, typename = typename std::enable_if<std::is_arithmetic<_Tp>::value>::type>
+    explicit Mat(const std::initializer_list<_Tp> list);
 #endif
 
 #ifdef CV_CXX_STD_ARRAY
@@ -1183,8 +1187,8 @@ public:
     /** @overload
     @param m Destination matrix. If it does not have a proper size or type before the operation, it is
     reallocated.
-    @param mask Operation mask. Its non-zero elements indicate which matrix elements need to be copied.
-    The mask has to be of type CV_8U and can have 1 or multiple channels.
+    @param mask Operation mask of the same size as \*this. Its non-zero elements indicate which matrix
+    elements need to be copied. The mask has to be of type CV_8U and can have 1 or multiple channels.
     */
     void copyTo( OutputArray m, InputArray mask ) const;
 
@@ -1220,7 +1224,8 @@ public:
 
     This is an advanced variant of the Mat::operator=(const Scalar& s) operator.
     @param value Assigned scalar converted to the actual array type.
-    @param mask Operation mask of the same size as \*this.
+    @param mask Operation mask of the same size as \*this. Its non-zero elements indicate which matrix
+    elements need to be copied. The mask has to be of type CV_8U and can have 1 or multiple channels
      */
     Mat& setTo(InputArray value, InputArray mask=noArray());
 
@@ -1523,6 +1528,11 @@ public:
     template<typename _Tp> void push_back(const Mat_<_Tp>& elem);
 
     /** @overload
+    @param elem Added element(s).
+    */
+    template<typename _Tp> void push_back(const std::vector<_Tp>& elem);
+
+    /** @overload
     @param m Added line(s).
     */
     void push_back(const Mat& m);
@@ -1652,7 +1662,7 @@ public:
                         inv_scale = 1.f/alpha_scale;
 
             CV_Assert( src1.type() == src2.type() &&
-                       src1.type() == CV_MAKETYPE(DataType<T>::depth, 4) &&
+                       src1.type() == CV_MAKETYPE(traits::Depth<T>::value, 4) &&
                        src1.size() == src2.size());
             Size size = src1.size();
             dst.create(size, src1.type());
@@ -1768,7 +1778,27 @@ public:
      */
     size_t total(int startDim, int endDim=INT_MAX) const;
 
-    //! returns N if the matrix is 1-channel (N x ptdim) or ptdim-channel (1 x N) or (N x 1); negative number otherwise
+    /**
+     * @param elemChannels Number of channels or number of columns the matrix should have.
+     *                     For a 2-D matrix, when the matrix has only 1 column, then it should have
+     *                     elemChannels channels; When the matrix has only 1 channel,
+     *                     then it should have elemChannels columns.
+     *                     For a 3-D matrix, it should have only one channel. Furthermore,
+     *                     if the number of planes is not one, then the number of rows
+     *                     within every plane has to be 1; if the number of rows within
+     *                     every plane is not 1, then the number of planes has to be 1.
+     * @param depth The depth the matrix should have. Set it to -1 when any depth is fine.
+     * @param requireContinuous Set it to true to require the matrix to be continuous
+     * @return -1 if the requirement is not satisfied.
+     *         Otherwise, it returns the number of elements in the matrix. Note
+     *         that an element may have multiple channels.
+     *
+     * The following code demonstrates its usage for a 2-d matrix:
+     * @snippet snippets/core_mat_checkVector.cpp example-2d
+     *
+     * The following code demonstrates its usage for a 3-d matrix:
+     * @snippet snippets/core_mat_checkVector.cpp example-3d
+     */
     int checkVector(int elemChannels, int depth=-1, bool requireContinuous=true) const;
 
     /** @brief Returns a pointer to the specified matrix row.
@@ -1932,7 +1962,7 @@ public:
                         inv_scale = 1.f/alpha_scale;
 
             CV_Assert( src1.type() == src2.type() &&
-                       src1.type() == DataType<VT>::type &&
+                       src1.type() == traits::Type<VT>::value &&
                        src1.size() == src2.size());
             Size size = src1.size();
             dst.create(size, src1.type());
@@ -2403,7 +2433,7 @@ public:
     void copyTo( OutputArray m ) const;
     //! copies those matrix elements to "m" that are marked with non-zero mask elements.
     void copyTo( OutputArray m, InputArray mask ) const;
-    //! converts matrix to another datatype with optional scalng. See cvConvertScale.
+    //! converts matrix to another datatype with optional scaling. See cvConvertScale.
     void convertTo( OutputArray m, int rtype, double alpha=1, double beta=0 ) const;
 
     void assignTo( UMat& m, int type=-1 ) const;

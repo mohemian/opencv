@@ -93,8 +93,8 @@ OCL_PERF_TEST_P(stitch, b12, TEST_DETECTORS)
         stopTimer();
     }
 
-    EXPECT_NEAR(pano.size().width, 1124, 50);
-    EXPECT_NEAR(pano.size().height, 644, 30);
+    EXPECT_NEAR(pano.size().width, 1124, GetParam() == "surf" ? 100 : 50);
+    EXPECT_NEAR(pano.size().height, 644, GetParam() == "surf" ? 60 : 30);
 
     SANITY_CHECK_NOTHING();
 }
@@ -103,6 +103,11 @@ OCL_PERF_TEST_P(stitch, boat, TEST_DETECTORS)
 {
     Size expected_dst_size(10789, 2663);
     checkDeviceMaxMemoryAllocSize(expected_dst_size, CV_16SC3, 4);
+
+#if defined(_WIN32) && !defined(_WIN64)
+    if (cv::ocl::useOpenCL())
+        throw ::perf::TestBase::PerfSkipTestException();
+#endif
 
     UMat pano;
 
